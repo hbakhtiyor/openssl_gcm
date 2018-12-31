@@ -11,6 +11,8 @@ import (
 func EncryptFile(inFilePath, outFilePath string, key, iv, aad []byte) error {
 	if _, err := os.Stat(inFilePath); os.IsNotExist(err) {
 		return fmt.Errorf("A file does not exist at %s", inFilePath)
+	} else if err != nil {
+		return err
 	}
 
 	inFile, err := os.Open(inFilePath)
@@ -36,8 +38,11 @@ func EncryptFile(inFilePath, outFilePath string, key, iv, aad []byte) error {
 
 // DecryptFile decrypts the file at the specified path using GCM.
 func DecryptFile(inFilePath, outFilePath string, key, iv, aad []byte) error {
-	if _, err := os.Stat(inFilePath); os.IsNotExist(err) {
+	stat, err := os.Stat(inFilePath)
+	if os.IsNotExist(err) {
 		return fmt.Errorf("A file does not exist at %s", inFilePath)
+	} else if err != nil {
+		return err
 	}
 
 	inFile, err := os.Open(inFilePath)
@@ -52,7 +57,7 @@ func DecryptFile(inFilePath, outFilePath string, key, iv, aad []byte) error {
 	}
 	defer outFile.Close()
 
-	r, err := NewGcmDecryptReader(inFile, key, iv, aad)
+	r, err := NewGcmDecryptReader(inFile, key, iv, aad, stat.Size())
 	if err != nil {
 		return err
 	}

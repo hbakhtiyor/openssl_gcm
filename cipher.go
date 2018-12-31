@@ -16,11 +16,15 @@ import (
 // https://github.com/marcopaganini/iocrypt/blob/master/iocrypt.go
 // https://github.com/minio/sio/tree/master/cmd/ncrypt
 
+const (
+	GcmTagMaxlen = openssl.GCM_TAG_MAXLEN
+)
+
 type gcmEncryptReader struct {
 	src io.Reader
 	ctx openssl.AuthenticatedEncryptionCipherCtx
 	eof bool
-	buf *bytes.Buffer
+	buf *bytes.Buffer // for finalize small bytes
 }
 
 func NewGcmEncryptReader(r io.Reader, key, iv, aad []byte) (*gcmEncryptReader, error) {
@@ -74,20 +78,22 @@ func (r *gcmEncryptReader) Read(p []byte) (int, error) {
 	if err != nil {
 		return len(data), fmt.Errorf("Failed to perform an encryption: %v", err)
 	}
-	r.buf.Write(data)
+	copy(p, data)
 
-	return r.buf.Read(p)
+	return n, nil
 }
 
 type gcmDecryptReader struct {
-	src io.Reader
-	ctx openssl.AuthenticatedDecryptionCipherCtx
-	eof bool
-	buf *bytes.Buffer
-	tag *bytes.Buffer // openssl.GCM_TAG_MAXLEN
+	src  io.Reader
+	ctx  openssl.AuthenticatedDecryptionCipherCtx
+	eof  bool
+	buf  *bytes.Buffer // for finalize small bytes
+	tag  *bytes.Buffer
+	off  int64
+	size int64
 }
 
-func NewGcmDecryptReader(r io.Reader, key, iv, aad []byte) (*gcmDecryptReader, error) {
+func NewGcmDecryptReader(r io.Reader, key, iv, aad []byte, size int64) (*gcmDecryptReader, error) {
 	ctx, err := openssl.NewGCMDecryptionCipherCtx(len(key)*8, nil, key, iv)
 	if err != nil {
 		return nil, fmt.Errorf("Failed making GCM decryption ctx: %v", err)
@@ -105,7 +111,9 @@ func NewGcmDecryptReader(r io.Reader, key, iv, aad []byte) (*gcmDecryptReader, e
 		src: r,
 		ctx: ctx,
 		buf: &bytes.Buffer{},
-		tag: &bytes.Buffer{},
+		// tag:  make([]byte, 0, GcmTagMaxlen),
+		tag:  &bytes.Buffer{},
+		size: size - GcmTagMaxlen,
 	}, nil
 }
 
@@ -134,29 +142,33 @@ func (r *gcmDecryptReader) Read(p []byte) (int, error) {
 		return n, err
 	}
 
+	r.off += int64(n)
+	if r.off > r.size {
+		d := int(r.off % r.size)
+
+		d %= cap(p)
+		if d == 0 {
+			d = n
+		}
+
+		r.tag.Write(p[n-d : n])
+		n -= d
+
+		// m := n - GcmTagMaxlen
+		// if m < 0 {
+		// 	m = 0
+		// }
+		// r.tag = append(r.tag, p[m:n]...)
+		// if len(r.tag) > GcmTagMaxlen {
+		// 	r.tag = r.tag[len(r.tag)-GcmTagMaxlen:]
+		// }
+	}
+
 	data, err := r.ctx.DecryptUpdate(p[:n])
 	if err != nil {
 		return len(data), fmt.Errorf("Failed to perform a decryption: %v", err)
 	}
-	r.buf.Write(data)
+	copy(p, data)
 
-	return r.buf.Read(p)
+	return n, nil
 }
-
-// type DecryptWriter struct {
-// 	writer io.Writer
-// 	buffer []byte
-// }
-
-// func NewDecryptWriter(w io.Writer) (*DecryptWriter, error) {
-// 	return &DecryptWriter{
-// 		writer: w,
-// 		buffer: make([]byte, 4096, 4096),
-// 	}, nil
-// }
-
-// func (w *DecryptWriter) Write(p []byte) (int, error) {
-// 	n := copy(w.buffer, p)
-// 	// w.buffer[:n]
-// 	return w.writer.Write(w.buffer[:n])
-// }
