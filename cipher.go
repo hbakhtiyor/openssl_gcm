@@ -91,6 +91,7 @@ type gcmDecryptReader struct {
 	tag  *bytes.Buffer
 	off  int64
 	size int64
+	// TODO possible to know the remaining bytes before eof instead of specifying size?
 }
 
 func NewGcmDecryptReader(r io.Reader, key, iv, aad []byte, size int64) (*gcmDecryptReader, error) {
@@ -108,10 +109,9 @@ func NewGcmDecryptReader(r io.Reader, key, iv, aad []byte, size int64) (*gcmDecr
 	}
 
 	return &gcmDecryptReader{
-		src: r,
-		ctx: ctx,
-		buf: &bytes.Buffer{},
-		// tag:  make([]byte, 0, GcmTagMaxlen),
+		src:  r,
+		ctx:  ctx,
+		buf:  &bytes.Buffer{},
 		tag:  &bytes.Buffer{},
 		size: size - GcmTagMaxlen,
 	}, nil
@@ -153,22 +153,14 @@ func (r *gcmDecryptReader) Read(p []byte) (int, error) {
 
 		r.tag.Write(p[n-d : n])
 		n -= d
-
-		// m := n - GcmTagMaxlen
-		// if m < 0 {
-		// 	m = 0
-		// }
-		// r.tag = append(r.tag, p[m:n]...)
-		// if len(r.tag) > GcmTagMaxlen {
-		// 	r.tag = r.tag[len(r.tag)-GcmTagMaxlen:]
-		// }
 	}
 
-	data, err := r.ctx.DecryptUpdate(p[:n])
-	if err != nil {
-		return len(data), fmt.Errorf("Failed to perform a decryption: %v", err)
-	}
-	copy(p, data)
-
+	if n > 0 {
+		data, err := r.ctx.DecryptUpdate(p[:n])
+		if err != nil {
+			return len(data), fmt.Errorf("Failed to perform a decryption: %v", err)
+		}
+		copy(p, data)
+	} // TODO if n == 0, read the remaining bytes and finalize
 	return n, nil
 }
